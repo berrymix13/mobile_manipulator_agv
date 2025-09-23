@@ -1,0 +1,57 @@
+<?xml version="1.0"?>
+<launch>
+ 
+  <!-- map file path -->
+  <arg name="map_file" default="$(find myagv_navigation)/map/map.yaml"/>
+
+  <!-- map server -->
+  <node name="map_server_for_test" pkg="map_server" type="map_server" args="$(arg map_file)" output="screen">
+    <param name="frame_id" value="map"/>
+  </node>
+
+  <arg name="use_map_topic" default="true"/>
+  <arg name="scan_topic" default="scan"/>
+
+  <!-- AMCL (Localization) -->
+  <node pkg="amcl" type="amcl" name="amcl" output="screen">
+    <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/amcl.yaml" command="load" />
+
+    <!-- initial Pose: from RViz 2D estimate pose -->
+    <param name="initial_pose_x" value="0.6"/>
+    <param name="initial_pose_y" value="0.1"/>
+    <param name="initial_pose_a" value="0.0"/> <!-- yaw(rad). 0.0 = ?? -->
+  </node>      
+
+  <!-- move_base (Navigation) -->
+  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+
+    <!-- load costmap params -->
+    <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/costmap_common_params.yaml" command="load" ns="global_costmap" />
+    <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/costmap_common_params.yaml" command="load" ns="local_costmap" />
+    <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/local_costmap_params.yaml" command="load" />
+    <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/global_costmap_params.yaml" command="load" />
+    <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/base_global_planner_params.yaml" command="load" ns="move_base" />
+    <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/base_local_planner_params.yaml" command="load" />
+
+    <!-- global / local planner ?? -->
+    <param name="base_global_planner" value="global_planner/GlobalPlanner"/>
+    <param name="planner_frequency" value="1.0"/>
+    <param name="planner_patience" value="2.0"/>
+
+    <param name="base_local_planner" value="base_local_planner/TrajectoryPlannerROS"/>
+    <param name="controller_frequency" value="5.0"/> 
+    <param name="controller_patience" value="3.0"/>
+    <param name="clearing_rotation_allowed" value="true"/>
+
+  </node>
+
+  <node pkg="move_base" type="move_base_simple" name="move_base_simple" output="screen">
+    <remap from="goal" to="/move_base/goal"/>
+  </node>
+
+
+  <!-- RViz del -->
+  <!-- <node pkg="rviz" type="rviz" name="rviz" args="-d $(find myagv_navigation)/rviz/TrajectoryPlannerROS.rviz"/> -->
+
+</launch>
+
