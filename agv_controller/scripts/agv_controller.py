@@ -31,12 +31,15 @@ class AGVController:
         self.marker_detected = False
         self.work_completed = False
         self.work_requested = False  # 작업 요청 플래그 추가
+        self.work_start_time = None  # 작업 시작 시간 추적
+        self.completed_markers = set()  # 완료된 마커 ID 추적
         
         # 파라미터 설정
         self.marker_stop_distance = rospy.get_param('~marker_stop_distance', 0.3)  # 30cm (기존 26cm에서 증가)
         self.marker_slow_distance = rospy.get_param('~marker_slow_distance', 1.0)  # 1m
         self.max_approach_distance = rospy.get_param('~max_approach_distance', 1.0)  # 1m
         self.slow_speed = rospy.get_param('~slow_speed', 0.05)  # 감속 시 속도 (m/s) - 더 느리게
+        self.work_timeout = rospy.get_param('~work_timeout', 30.0)  # 작업 타임아웃 (초)
         
         # Waypoint 리스트 (시작점 포함)
         self.waypoints = self._load_waypoints()
@@ -48,6 +51,7 @@ class AGVController:
         
         # Subscribers  
         self.marker_info_sub = rospy.Subscriber('/marker_info', MarkerInfo, self.marker_info_callback)
+        self.arm_status_sub = rospy.Subscriber('/arm_work_status', String, self.arm_status_callback)
         
         # Arm Action Clients
         self.move_base_client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
@@ -109,15 +113,20 @@ class AGVController:
             self.current_marker_distance = msg.distance
             self.current_marker_info = msg
             
-            # 마커 정보 로깅 (더 자세한 정보)
-            rospy.loginfo(f"AGV Controller: Marker {msg.marker_id} detected - "
-                         f"Distance: {msg.distance:.3f}m, "
-                         f"Type: {msg.marker_type}, "
-                         f"Size: {msg.marker_size:.3f}m, "
-                         f"In work range: {msg.in_work_range}")
+            # 마커 정보 로깅 (간소화)
+            rospy.logdebug(f"AGV Controller: Marker {msg.marker_id} detected - "
+                          f"Distance: {msg.distance:.3f}m, "
+                          f"Type: {msg.marker_type}, "
+                          f"Size: {msg.marker_size:.3f}m, "
+                          f"In work range: {msg.in_work_range}")
             
             # 마커 감지 시 현재 상태 확인
             if self.current_state in [AGVState.NAVIGATING, AGVState.SLOWING_DOWN]:
+                # 이미 완료된 마커인지 확인
+                if msg.marker_id in self.completed_markers:
+                    rospy.logdebug(f"AGV Controller: Marker {msg.marker_id} already completed - Ignoring")
+                    return
+                
                 # 작업 범위 내에 있는지 확인
                 if msg.in_work_range and self.current_state == AGVState.NAVIGATING:
                     rospy.loginfo(f"AGV Controller: Marker {msg.marker_id} is in work range - Starting to slow down")
@@ -139,10 +148,27 @@ class AGVController:
                     self.current_state = AGVState.STOPPED_FOR_WORK
             else:
                 # 다른 상태에서는 마커 정보만 저장하고 로깅
-                rospy.loginfo(f"AGV Controller: Marker {msg.marker_id} detected but AGV is in {self.current_state.name} state - Ignoring")
+                rospy.logdebug(f"AGV Controller: Marker {msg.marker_id} detected but AGV is in {self.current_state.name} state - Ignoring")
         else:
             self.marker_detected = False
             rospy.loginfo("AGV Controller: No marker detected")
+
+    def arm_status_callback(self, msg):
+        """로봇팔 상태 콜백"""
+        rospy.logdebug(f"AGV Controller: Received arm status: {msg.data}")
+        
+        if msg.data == "COMPLETED":
+            # 로봇팔 작업 완료 - 다음 작업 진행
+            rospy.loginfo("AGV Controller: Arm work completed via status topic")
+            self.proceed_to_next_task()
+        elif msg.data == "FAILED":
+            # 로봇팔 작업 실패 - 오류 처리
+            rospy.logwarn("AGV Controller: Arm work failed via status topic")
+            self.handle_arm_error()
+        elif msg.data == "WORKING":
+            # 로봇팔 작업 중 - 대기
+            rospy.logdebug("AGV Controller: Arm is working - Waiting for completion")
+            self.wait_for_arm_completion()
 
     def control_loop(self, event):
         """메인 제어 루프"""
@@ -158,6 +184,7 @@ class AGVController:
         elif self.current_state == AGVState.STOPPED_FOR_WORK:
             if not self.work_requested:
                 self._request_arm_work()
+            # work_requested가 True이면 아무것도 하지 않음 (WORKING 상태로 전환 대기)
             
         elif self.current_state == AGVState.WORKING:
             self._check_work_status()
@@ -244,6 +271,15 @@ class AGVController:
     def _request_arm_work(self):
         """로봇팔에게 작업 요청"""
         if hasattr(self, 'current_marker_info') and not self.work_requested:
+            # 이미 완료된 마커인지 확인
+            if self.current_marker_info.marker_id in self.completed_markers:
+                rospy.loginfo(f"AGV Controller: Marker {self.current_marker_info.marker_id} already completed - Resuming navigation")
+                self.work_requested = False
+                self.move_base_cancelled = False
+                self.current_state = AGVState.IDLE
+                self._publish_status("Marker already completed - Resuming navigation")
+                return
+                
             goal = MarkerApproachGoal()
             goal.target_marker_id = self.current_marker_info.marker_id
             
@@ -265,26 +301,96 @@ class AGVController:
             
             self.marker_approach_client.send_goal(goal)
             self.work_requested = True  # 작업 요청 플래그 설정
+            self.work_start_time = rospy.Time.now()  # 작업 시작 시간 기록
             self.current_state = AGVState.WORKING
             self._publish_status(f"Robot arm working on marker {goal.target_marker_id}...")
 
     def _check_work_status(self):
-        """로봇팔 작업 상태 확인"""
+        """로봇팔 작업 상태 확인 (액션 서버 백업 방식)"""
+        # 상태 토픽이 우선되므로, 액션 서버는 백업으로만 사용
         state = self.marker_approach_client.get_state()
         
+        # 타임아웃 체크
+        if self.work_start_time is not None:
+            elapsed_time = (rospy.Time.now() - self.work_start_time).to_sec()
+            if elapsed_time > self.work_timeout:
+                rospy.logwarn(f"AGV Controller: Arm work timeout after {elapsed_time:.1f}s - Resuming navigation")
+                self.work_requested = False  # 작업 요청 플래그 리셋
+                self.move_base_cancelled = False  # move_base 상태 리셋
+                self.current_state = AGVState.IDLE
+                self.work_start_time = None
+                self._publish_status("Arm work timeout - Resuming navigation")
+                return
+        
+        # 액션 서버 상태 로깅 (디버깅용)
+        if state != actionlib.GoalStatus.PENDING and state != actionlib.GoalStatus.ACTIVE:
+            rospy.loginfo(f"AGV Controller: Action server state changed to {state}")
+        else:
+            # 주기적으로 상태 확인 (10초마다)
+            if hasattr(self, 'last_status_check_time'):
+                if (rospy.Time.now() - self.last_status_check_time).to_sec() > 10.0:
+                    rospy.loginfo(f"AGV Controller: Still waiting for arm work completion (state: {state})")
+                    self.last_status_check_time = rospy.Time.now()
+            else:
+                self.last_status_check_time = rospy.Time.now()
+        
+        # 액션 서버를 통한 상태 확인 (백업)
         if state == actionlib.GoalStatus.SUCCEEDED:
-            rospy.loginfo("AGV Controller: Arm work completed - Resuming navigation")
+            rospy.loginfo("AGV Controller: Arm work completed via action server - Resuming navigation")
             self.work_completed = True
             self.work_requested = False  # 작업 요청 플래그 리셋
             self.move_base_cancelled = False  # move_base 상태 리셋
             self.current_state = AGVState.IDLE  # 다음 waypoint로 계속
+            self.work_start_time = None
+            # 완료된 마커 ID 추가
+            if hasattr(self, 'current_marker_info'):
+                self.completed_markers.add(self.current_marker_info.marker_id)
+                rospy.loginfo(f"AGV Controller: Added marker {self.current_marker_info.marker_id} to completed list")
             self._publish_status("Arm work completed - Resuming navigation")
             
+        # 액션 서버 결과 확인 (더 확실한 방법)
+        elif state == actionlib.GoalStatus.ACTIVE:
+            # 액션이 활성 상태인 경우, 결과를 직접 확인
+            try:
+                result = self.marker_approach_client.get_result()
+                if result is not None:
+                    rospy.loginfo("AGV Controller: Action completed - Checking result")
+                    # 결과가 있으면 성공으로 간주
+                    self.work_completed = True
+                    self.work_requested = False
+                    self.move_base_cancelled = False
+                    self.current_state = AGVState.IDLE
+                    self.work_start_time = None
+                    if hasattr(self, 'current_marker_info'):
+                        self.completed_markers.add(self.current_marker_info.marker_id)
+                        rospy.loginfo(f"AGV Controller: Added marker {self.current_marker_info.marker_id} to completed list")
+                    self._publish_status("Arm work completed - Resuming navigation")
+            except Exception as e:
+                rospy.logdebug(f"AGV Controller: Error checking action result: {e}")
+            
         elif state == actionlib.GoalStatus.ABORTED:
-            rospy.logwarn("AGV Controller: Arm work failed - Resuming navigation anyway")
+            rospy.logwarn("AGV Controller: Arm work failed via action server - Resuming navigation anyway")
             self.work_requested = False  # 작업 요청 플래그 리셋
             self.move_base_cancelled = False  # move_base 상태 리셋
             self.current_state = AGVState.IDLE
+            self.work_start_time = None
+            self._publish_status("Arm work failed - Resuming navigation")
+            
+        elif state == actionlib.GoalStatus.PREEMPTED:
+            rospy.logwarn("AGV Controller: Arm work preempted via action server - Resuming navigation")
+            self.work_requested = False  # 작업 요청 플래그 리셋
+            self.move_base_cancelled = False  # move_base 상태 리셋
+            self.current_state = AGVState.IDLE
+            self.work_start_time = None
+            self._publish_status("Arm work preempted - Resuming navigation")
+            
+        elif state in [actionlib.GoalStatus.LOST, actionlib.GoalStatus.REJECTED]:
+            rospy.logwarn(f"AGV Controller: Arm work lost/rejected via action server (state: {state}) - Resuming navigation")
+            self.work_requested = False  # 작업 요청 플래그 리셋
+            self.move_base_cancelled = False  # move_base 상태 리셋
+            self.current_state = AGVState.IDLE
+            self.work_start_time = None
+            self._publish_status("Arm work lost - Resuming navigation")
 
     def _return_home(self):
         """시작점으로 복귀"""
@@ -307,6 +413,47 @@ class AGVController:
         elif self.move_base_client.get_state() == actionlib.GoalStatus.ABORTED:
             rospy.logwarn("AGV Controller: Return home failed - Retrying")
             self._return_home()
+
+    def proceed_to_next_task(self):
+        """로봇팔 작업 완료 후 다음 작업 진행"""
+        if self.current_state == AGVState.WORKING:
+            rospy.loginfo("AGV Controller: Arm work completed via status topic - Resuming navigation")
+            self.work_completed = True
+            self.work_requested = False
+            self.move_base_cancelled = False
+            self.current_state = AGVState.IDLE
+            self.work_start_time = None
+            
+            # 완료된 마커 ID 추가
+            if hasattr(self, 'current_marker_info'):
+                self.completed_markers.add(self.current_marker_info.marker_id)
+                rospy.loginfo(f"AGV Controller: Added marker {self.current_marker_info.marker_id} to completed list")
+            
+            self._publish_status("Arm work completed - Resuming navigation")
+        else:
+            rospy.logwarn(f"AGV Controller: Received COMPLETED status but AGV is in {self.current_state.name} state - Ignoring")
+
+    def handle_arm_error(self):
+        """로봇팔 작업 실패 처리"""
+        if self.current_state == AGVState.WORKING:
+            rospy.logwarn("AGV Controller: Arm work failed via status topic - Resuming navigation anyway")
+            self.work_requested = False
+            self.move_base_cancelled = False
+            self.current_state = AGVState.IDLE
+            self.work_start_time = None
+            self._publish_status("Arm work failed - Resuming navigation")
+        else:
+            rospy.logwarn(f"AGV Controller: Received FAILED status but AGV is in {self.current_state.name} state - Ignoring")
+
+    def wait_for_arm_completion(self):
+        """로봇팔 작업 중 대기"""
+        if self.current_state == AGVState.WORKING:
+            rospy.logdebug("AGV Controller: Arm is working - Waiting for completion")
+            # 작업 시작 시간이 설정되지 않은 경우 현재 시간으로 설정
+            if self.work_start_time is None:
+                self.work_start_time = rospy.Time.now()
+        else:
+            rospy.logdebug(f"AGV Controller: Received WORKING status but AGV is in {self.current_state.name} state - Ignoring")
 
     def _publish_status(self, status_msg):
         """상태 메시지 발행"""
