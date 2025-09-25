@@ -1,0 +1,21 @@
+# system_msgs/action/MarkerApproach.action
+
+# Goal
+uint32 target_marker_id
+float32 approach_distance  # 접근 거리 (m)
+float32 approach_height    # 접근 높이 (m)
+bool return_to_home       # 초기 자세로 복귀 여부
+---
+# Result
+bool success
+string completion_status   # "completed", "failed_planning", "failed_execution", "marker_not_found"
+float32 execution_time    # 실행 시간 (초)
+string error_details
+uint32 error_code
+geometry_msgs/Pose final_pose  # 최종 도달한 포즈
+---
+# Feedback
+string current_phase      # "approaching", "reaching_marker", "returning"
+float32 progress         # 진행률 (0.0-1.0)
+geometry_msgs/Pose current_pose
+string status_message
