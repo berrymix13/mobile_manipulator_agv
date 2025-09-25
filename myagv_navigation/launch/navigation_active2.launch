@@ -24,30 +24,20 @@
 
   <!-- move_base (Navigation) -->
   <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+    <!-- TF 버퍼 지속시간 증가 -->
+    <param name="tf_buffer_duration" value="10.0"/>
 
     <!-- load costmap params -->
     <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/costmap_common_params.yaml" command="load" ns="global_costmap" />
     <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/costmap_common_params.yaml" command="load" ns="local_costmap" />
     <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/local_costmap_params.yaml" command="load" />
     <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/global_costmap_params.yaml" command="load" />
-    <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/base_global_planner_params.yaml" command="load" ns="move_base" />
+    <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/move_base_params.yaml" command="load" />
+    <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/base_global_planner_params.yaml" command="load" />
     <rosparam file="$(find myagv_navigation)/param/base_local_planner_param/base_local_planner_params.yaml" command="load" />
 
-    <!-- global / local planner ?? -->
-    <param name="base_global_planner" value="global_planner/GlobalPlanner"/>
-    <param name="planner_frequency" value="1.0"/>
-    <param name="planner_patience" value="2.0"/>
-
-    <param name="base_local_planner" value="base_local_planner/TrajectoryPlannerROS"/>
-    <param name="controller_frequency" value="5.0"/> 
-    <param name="controller_patience" value="3.0"/>
-    <param name="clearing_rotation_allowed" value="true"/>
-
   </node>
 
-  <node pkg="move_base" type="move_base_simple" name="move_base_simple" output="screen">
-    <remap from="goal" to="/move_base/goal"/>
-  </node>
 
 
   <!-- RViz del -->

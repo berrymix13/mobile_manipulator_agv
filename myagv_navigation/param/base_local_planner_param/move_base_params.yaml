@@ -1,6 +1,6 @@
 shutdown_costmaps: false
 
-controller_frequency: 1.0  ##
+controller_frequency: 5.0  # base_local_planner_params와 통일
 controller_patience: 3.0 # 3.0
 
 planner_frequency: 1.0
@@ -11,22 +11,18 @@ oscillation_distance: 0.1
 
 # Planner selection
 base_global_planner: "global_planner/GlobalPlanner"  
-base_local_planner: "teb_local_planner/TebLocalPlannerROS"
+base_local_planner: "base_local_planner/TrajectoryPlannerROS"  # base_local_planner_params와 통일
 
 max_planning_retries: 1
 
-recovery_behavior_enabled: true
-clearing_rotation_allowed: true
+recovery_behavior_enabled: false  # Recovery behavior 비활성화
+clearing_rotation_allowed: false  # 회전 recovery 비활성화
 
-recovery_behaviors:
-  - name: 'conservative_reset'
-    type: 'clear_costmap_recovery/ClearCostmapRecovery'
-  #- name: 'aggressive_reset'
-  #  type: 'clear_costmap_recovery/ClearCostmapRecovery'
-  #- name: 'super_reset'
-  #  type: 'clear_costmap_recovery/ClearCostmapRecovery'
-  - name: 'clearing_rotation'
-    type: 'rotate_recovery/RotateRecovery'
+# recovery_behaviors:
+#   - name: 'conservative_reset'
+#     type: 'clear_costmap_recovery/ClearCostmapRecovery'
+#   - name: 'clearing_rotation'
+#     type: 'rotate_recovery/RotateRecovery'
   #- name: 'move_slow_and_clear'
     #type: 'move_slow_and_clear/MoveSlowAndClear'
     

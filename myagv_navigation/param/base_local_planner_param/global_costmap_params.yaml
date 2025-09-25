@@ -5,7 +5,7 @@ global_costmap:
   update_frequency: 0.3
   publish_frequency:  0.3
   rolling_window: false
-  transform_tolerance: 1
+  transform_tolerance: 2.0
 
   plugins:
      - {name: static_layer, type: 'costmap_2d::StaticLayer'}
