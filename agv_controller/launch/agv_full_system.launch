@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 오도메트리 -->
+  <include file="$(find myagv_odometry)/launch/myagv_active.launch" />
+
+  <!-- Navigation Stack -->
+  <include file="$(find myagv_navigation)/launch/navigation_active2.launch">
+    <arg name="map_file" value="/home/er/maps/0922/map.yaml"/>
+  </include>
+
+  <!-- AGV 제어 노드 -->
+  <node pkg="agv_controller"
+        type="agv_controller.py"
+        name="agv_controller"
+        output="screen" />
+</launch>
